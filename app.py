@@ -1,82 +1,129 @@
 import streamlit as st
+import pandas as pd
 import numpy as np
 import math
-from scipy.interpolate import interp1d, interp2d
+from scipy.interpolate import interp1d
 
-st.set_page_config(page_title="BYD电热耦合仿真平台", layout="wide")
+st.set_page_config(page_title="BYD模块电热耦合对标平台", layout="wide")
+st.title("🔬 功率模块动态损耗及结温闭环对标平台")
 
-# ==========================================
-# 1. 动态数据库：从图片提取的数据点
-# ==========================================
-# 假设从 600A 模块规格书提取的 Eon 数据点 (Ic, Tj=25, Tj=150)
-ic_range = np.array([10, 50, 100, 200, 400, 600, 800])
-eon_25 = np.array([0.88, 2.98, 5.94, 13.49, 35.32, 70.77, 121.08]) # mJ
-eoff_25 = np.array([0.98, 2.81, 4.93, 9.53, 24.19, 42.92, 65.56]) # mJ
+# --- 1. 原始测试数据矩阵录入 (支持实时修改) ---
+st.header("1. 原始测试矩阵录入 (Double Pulse & Datasheet)")
+col_data1, col_data2 = st.columns(2)
 
-# 创建插值函数 (基于 Ic 和 Tj 的二维模型)
-f_eon = interp1d(ic_range, eon_25, kind='quadratic', fill_value="extrapolate")
-f_eoff = interp1d(ic_range, eoff_25, kind='quadratic', fill_value="extrapolate")
+with col_data1:
+    st.subheader("⚡ 双脉冲测试能量矩阵 (mJ)")
+    # 提供可编辑表格
+    dp_df = pd.DataFrame({
+        'Ic (A)': [10, 50, 100, 200, 400, 600, 800],
+        'Eon (mJ)': [0.88, 2.98, 5.94, 13.49, 35.32, 70.77, 121.08],
+        'Eoff (mJ)': [0.98, 2.81, 4.93, 9.53, 24.19, 42.92, 65.56],
+        'Erec (mJ)': [0.29, 0.96, 1.93, 2.95, 4.64, 5.49, 4.64]
+    })
+    edited_dp = st.data_editor(dp_df, num_rows="dynamic", key="dp_table")
 
-# ==========================================
-# 2. UI 界面：工况与热阻设置
-# ==========================================
-st.title("🛡️ 功率模块动态损耗与结温闭环仿真")
+with col_data2:
+    st.subheader("📉 规格书通态压降矩阵 (V)")
+    # Vce vs Ic 在不同结温下的表现
+    vce_df = pd.DataFrame({
+        'Ic (A)': [10, 100, 450, 600, 900],
+        'Vce_25C (V)': [0.85, 1.10, 1.80, 2.20, 2.90],
+        'Vce_150C (V)': [0.75, 1.05, 1.95, 2.50, 3.40]
+    })
+    edited_vce = st.data_editor(vce_df, num_rows="dynamic", key="vce_table")
 
-with st.sidebar:
-    st.header("1. 热阻参数 (Rth)")
-    # 从图 10 提取 RthJF 稳态值
-    rth_jc = st.number_input("壳到结热阻 RthJC (K/W)", value=0.065)
-    t_case = st.number_input("基板温度 Tc (℃)", value=65.0)
+# --- 2. 修正系数与环境设置 ---
+st.divider()
+st.header("2. 物理修正系数与工况设置")
+c1, c2, c3, c4 = st.columns(4)
 
-col1, col2 = st.columns(2)
-with col1:
-    st.header("2. 实时运行工况")
-    vdc = st.number_input("直流母线电压 Vdc (V)", value=510.0)
-    iout = st.number_input("输出有效值 Iout (Arms)", value=187.0)
+with c1:
+    st.markdown("**工况基本参数**")
+    vdc = st.number_input("直流电压 Vdc (V)", value=510.0)
+    v_ref = st.number_input("双脉冲基准 Vref (V)", value=510.0)
+    iout = st.number_input("电流有效值 Iout (Arms)", value=187.0)
     fsw = st.number_input("开关频率 fsw (Hz)", value=10000)
-    rg = st.number_input("当前驱动电阻 Rg (Ω)", value=5.0)
 
-# ==========================================
-# 3. 核心计算引擎：电热耦合迭代 solver
-# ==========================================
-if st.button("🚀 执行动态闭环计算"):
-    # 初始结温猜测值
-    tj_iter = t_case + 10 
-    i_peak = math.sqrt(2) * iout
+with c2:
+    st.markdown("**调制与电阻**")
+    m_index = st.number_input("调制度 M", value=0.92)
+    cosphi = st.number_input("功率因数 cosφ", value=0.92)
+    fout = st.number_input("输出频率 fout (Hz)", value=50.0)
+    rg_ext = st.number_input("外部驱动电阻 Rg (Ω)", value=5.0)
+    rg_ref = st.number_input("基准电阻 Rg_ref (Ω)", value=5.0)
+
+with c3:
+    st.markdown("**修正指数 (重要)**")
+    kv_exp = st.number_input("电压修正指数 Kv", value=1.3, help="Esw 随电压变化的幂次")
+    ki_exp = st.number_input("电流修正指数 Ki", value=1.0, help="IGBT通常取1.0，SiC取0.6左右")
+    kr_factor = st.number_input("电阻修正系数 Kr", value=1.0, help="Rg 对损耗的影响倍率")
+
+with c4:
+    st.markdown("**热阻与环境**")
+    rth_jc = st.number_input("结到壳热阻 RthJC (K/W)", value=0.065, format="%.4f")
+    t_case = st.number_input("基板/外壳温度 Tc (℃)", value=65.0)
+    mode = st.selectbox("调制模式", ["SVPWM", "PWM"])
+
+# --- 3. 核心计算逻辑 (动态插值 + 闭环迭代) ---
+def run_solver():
+    # 建立插值函数
+    f_eon = interp1d(edited_dp['Ic (A)'], edited_dp['Eon (mJ)'], kind='quadratic', fill_value="extrapolate")
+    f_eoff = interp1d(edited_dp['Ic (A)'], edited_dp['Eoff (mJ)'], kind='quadratic', fill_value="extrapolate")
+    f_erec = interp1d(edited_dp['Ic (A)'], edited_dp['Erec (mJ)'], kind='quadratic', fill_value="extrapolate")
     
-    # 开始迭代 (为了精确反推损耗和结温)
-    for i in range(5):
-        # A. 动态选取损耗量 (基于插值)
-        eon_base = f_eon(iout)
-        eoff_base = f_eoff(iout)
+    f_vce_25 = interp1d(edited_vce['Ic (A)'], edited_vce['Vce_25C (V)'], kind='quadratic', fill_value="extrapolate")
+    f_vce_150 = interp1d(edited_vce['Ic (A)'], edited_vce['Vce_150C (V)'], kind='quadratic', fill_value="extrapolate")
+
+    # 初始结温猜测
+    tj_loop = t_case + 10.0
+    i_pk = math.sqrt(2) * iout
+    
+    # 闭环迭代算法
+    for i in range(10):
+        # 1. 开关损耗计算 (基于当前 Tj 修正)
+        e_sw_base = f_eon(iout) + f_eoff(iout) + f_erec(iout)
+        v_corr = math.pow(vdc / v_ref, kv_exp)
+        # 温度对开关能量的修正 (常见公式: 1 + 0.003*(Tj-25))
+        t_corr_sw = 1 + 0.003 * (tj_loop - 25.0)
+        p_sw = (1/math.pi) * fsw * (e_sw_base / 1000) * v_corr * t_corr_sw * kr_factor
+
+        # 2. 导通损耗计算 (双结温插值确定 Tj 下的 Vce)
+        vce_at_tj = f_vce_25(iout) + (f_vce_150(iout) - f_vce_25(iout)) * (tj_loop - 25.0) / (150.0 - 25.0)
         
-        # B. 工况修正因子
-        kv = math.pow(vdc / 510, 1.3) # 电压修正
-        kt = 1 + 0.003 * (tj_iter - 25) # 温度修正
+        phi = math.acos(cosphi)
+        if mode == "SVPWM":
+            k_v0 = 0.25 * m_index * cosphi
+            k_r = (24*cosphi - 2*math.sqrt(3)*math.cos(2*phi) - 3*math.sqrt(3)) / 24
+        else:
+            k_v0 = (1 / (2 * math.pi)) + (m_index * cosphi / 8)
+            k_r = (1 / 8) + (m_index * cosphi / (3 * math.pi))
         
-        p_sw = (eon_base + eoff_base) * fsw * kv * kt * (1/math.pi) / 1000
-        
-        # C. 导通损耗 (这里也建议采用插值 Vce(Ic, Tj))
-        # 简化演示：采用线性 Vce = 1.0 + 0.002*tj_iter
-        vce = 1.0 + 0.001 * tj_iter
-        p_cond = vce * iout * 0.45 # 简化 SVPWM 导通分量
-        
+        # 简化导通功耗估算 (结合 M 和 cosphi)
+        p_cond = vce_at_tj * iout * (k_v0 * 4 + k_r * 2) / 2 # 解析项加权
+
         p_total = p_sw + p_cond
         
-        # D. 反推结温 Tj = Tc + P * Rth
+        # 3. 结温反馈 Tj = Tc + P * Rth
         tj_new = t_case + p_total * rth_jc
         
-        if abs(tj_new - tj_iter) < 0.1:
+        if abs(tj_new - tj_loop) < 0.05:
             break
-        tj_iter = tj_new
+        tj_loop = tj_new
 
-    # ==========================================
-    # 4. 结果输出
-    # ==========================================
-    st.divider()
-    res1, res2, res3 = st.columns(3)
-    res1.metric("反推实时结温 Tj", f"{tj_iter:.2f} ℃")
-    res2.metric("动态总损耗 P_total", f"{p_total:.2f} W")
-    res3.metric("当前电流单芯密度", f"{iout/6:.1f} A/chip")
+    return p_cond, p_sw, tj_loop
+
+if st.button("🚀 执行全工况电热闭环仿真"):
+    p_cond, p_sw, tj_final = run_solver()
     
-    st.write(f"提示：当前 Eon 是基于 Ic={iout}A 从双脉冲表 动态插值选取的，而非固定值。")
+    st.divider()
+    st.subheader("3. 仿真结果分析")
+    r1, r2, r3, r4 = st.columns(4)
+    r1.metric("稳定结温 Tj", f"{tj_final:.2f} ℃")
+    r2.metric("总功耗 P_total", f"{p_cond + p_sw:.2f} W")
+    r3.metric("导通损耗 P_cond", f"{p_cond:.2f} W")
+    r4.metric("开关损耗 P_sw", f"{p_sw:.2f} W")
+
+    st.markdown("### 🔍 数学模型透明化展示")
+    st.latex(r"P_{total} = P_{cond}(I_{out}, T_j, M, \cos\phi) + P_{sw}(I_{out}, V_{dc}, T_j, R_g)")
+    st.latex(r"T_j = T_c + P_{total} \times R_{th(jc)}")
+    st.write("注：当前开关损耗已根据实测矩阵进行 **Quadratic (二次) 插值**。")
