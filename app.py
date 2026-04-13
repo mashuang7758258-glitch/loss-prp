@@ -5,7 +5,7 @@ import math
 from scipy.interpolate import interp1d
 
 st.set_page_config(page_title="BYD纯芯片级损耗对标", layout="wide")
-st.title("🛡️ 功率模块纯芯片级损耗对标平台")
+st.title("🛡️ 功率模块纯芯片级损耗对标平台 (双基准电阻版)")
 
 st.sidebar.header("配置方案")
 scheme = st.sidebar.radio("选择计算方案", ["芯片级方案 (Chip-level)", "模块级方案 (Module-level)"])
@@ -20,8 +20,8 @@ with col_d1:
     v_df = pd.DataFrame({
         'Temp (℃)': [25, 25, 150, 150],
         'Current (A)': [100.0, 600.0, 100.0, 600.0],
-        'V_drop_T (V)': [1.10, 2.20, 1.05, 2.50], # IGBT压降
-        'V_drop_D (V)': [1.20, 2.00, 1.10, 2.20]  # Diode压降
+        'V_drop_T (V)': [1.10, 2.20, 1.05, 2.50], 
+        'V_drop_D (V)': [1.20, 2.00, 1.10, 2.20]  
     })
     ev_df = st.data_editor(v_df, num_rows="dynamic", key="v_table_pure")
 
@@ -56,10 +56,11 @@ with c2:
 
 with c3:
     st.markdown("**门极电阻与测试基准**")
-    v_ref = st.number_input("测试基准电压 Vref (V)", value=510.0)
-    rg_ref = st.number_input("规格书测试 Rg_ref (Ω)", value=5.0, help="厂家测双脉冲时用的电阻")
-    rg_on_act = st.number_input("实际开通 Rg_on (Ω)", value=5.0)
-    rg_off_act = st.number_input("实际关断 Rg_off (Ω)", value=25.0)
+    v_ref = st.number_input("规格书基准 Vref (V)", value=510.0)
+    rg_on_ref = st.number_input("规格书开通基准 Rg_on_ref (Ω)", value=5.0)
+    rg_off_ref = st.number_input("规格书关断基准 Rg_off_ref (Ω)", value=5.0)
+    rg_on_act = st.number_input("实际电路 Rg_on_act (Ω)", value=5.0)
+    rg_off_act = st.number_input("实际电路 Rg_off_act (Ω)", value=25.0)
 
 with c4:
     st.markdown("**热阻与修正系数**")
@@ -67,7 +68,7 @@ with c4:
     t_case = st.number_input("基板温度 Tc (℃)", value=65.0)
     kv_exp = st.number_input("电压修正指数 Kv", value=1.3)
     kr_exp = st.number_input("电阻修正指数 Kr", value=1.0)
-    # --- 3. 核心计算引擎 (严防负值 + 公式对标) ---
+    # --- 3. 核心计算引擎 ---
 def advanced_interp(df, target_i, target_t, item_name):
     clean_df = df.dropna()
     temp_list, val_list = [], []
@@ -75,11 +76,11 @@ def advanced_interp(df, target_i, target_t, item_name):
         sorted_g = group.sort_values('Current (A)')
         if len(sorted_g) >= 2:
             f = interp1d(sorted_g['Current (A)'], sorted_g[item_name], kind='linear', fill_value="extrapolate")
-            val = max(0.0, float(f(target_i))) # 物理锁1：杜绝外推负值
+            val = max(0.0, float(f(target_i))) 
             val_list.append(val)
             temp_list.append(temp)
     if len(temp_list) >= 2:
-        return max(0.0, float(interp1d(temp_list, val_list, fill_value="extrapolate")(target_t))) # 物理锁2
+        return max(0.0, float(interp1d(temp_list, val_list, fill_value="extrapolate")(target_t))) 
     elif len(temp_list) == 1: 
         return max(0.0, val_list[0])
     return 0.0
@@ -87,12 +88,11 @@ def advanced_interp(df, target_i, target_t, item_name):
 if st.button("🚀 执行纯芯片级计算"):
     tj_loop = t_case + 5.0
     i_lookup = iout_rms / n_chips if scheme == "芯片级方案 (Chip-level)" else iout_rms
-    i_pk = math.sqrt(2) * i_lookup # 计算查表用的单芯/单臂峰值电流
+    i_pk = math.sqrt(2) * i_lookup 
     theta = math.acos(cosphi)
     
     for _ in range(12):
-        # A. 动态提取 V0 和 r (完美对接你的公式)
-        # 通过在 I_pk 和 I_pk/2 处插值，反推 V0 和 r_on
+        # A. 动态提取 V0 和 r
         v_t_pk = advanced_interp(ev_df, i_pk, tj_loop, 'V_drop_T (V)')
         v_t_half = advanced_interp(ev_df, i_pk/2, tj_loop, 'V_drop_T (V)')
         r_t = (v_t_pk - v_t_half) / (i_pk / 2) if i_pk > 0 else 0
@@ -103,30 +103,33 @@ if st.button("🚀 执行纯芯片级计算"):
         r_d = (v_d_pk - v_d_half) / (i_pk / 2) if i_pk > 0 else 0
         v0_d = v_d_pk - r_d * i_pk
 
-        # B. 调制系数解析 (严格遵守你的源Sheet公式)
+        # B. 调制系数解析
         if mode == "SVPWM":
             kv0_t, kr_t = m_index*cosphi/4, (24*cosphi - 2*math.sqrt(3)*math.cos(2*theta) - 3*math.sqrt(3))/24
-            # 二极管 SVPWM 复杂公式
             kv0_d = (4 - m_index*math.pi*cosphi)/(4*math.pi)
             kr_d = (6*math.pi - 24*m_index*cosphi + 2*math.sqrt(3)*m_index*math.cos(2*theta) + 3*math.sqrt(3)*m_index)/(24*math.pi)
         else:
             kv0_t, kr_t = 1/(2*math.pi) + m_index*cosphi/8, 1/8 + m_index*cosphi/(3*math.pi)
             kv0_d, kr_d = 1/(2*math.pi) - m_index*cosphi/8, 1/8 - m_index*cosphi/(3*math.pi)
         
-        # 导通损耗 (放大回总电流维度)
+        # 导通损耗
         mult = n_chips if scheme == "芯片级方案 (Chip-level)" else 1
         p_cond_t = (v0_t * i_pk * kv0_t + r_t * i_pk**2 * kr_t) * mult
         p_cond_d = (v0_d * i_pk * kv0_d + r_d * i_pk**2 * kr_d) * mult
         p_cond = p_cond_t + p_cond_d
 
-        # C. 开关损耗 (查表 + 修正)
+        # C. 开关损耗 (双基准电阻分离修正)
         e_on = advanced_interp(ee_df, i_lookup, tj_loop, 'Eon (mJ)')
         e_off = advanced_interp(ee_df, i_lookup, tj_loop, 'Eoff (mJ)')
         e_rec = advanced_interp(ee_df, i_lookup, tj_loop, 'Erec (mJ)')
         
-        p_on = (1/math.pi) * fsw * (e_on * mult / 1000) * (vdc_act/v_ref)**kv_exp * (rg_on_act/rg_ref)**kr_exp
-        p_off = (1/math.pi) * fsw * (e_off * mult / 1000) * (vdc_act/v_ref)**kv_exp * (rg_off_act/rg_ref)**kr_exp
-        p_rec = (1/math.pi) * fsw * (e_rec * mult / 1000) * (vdc_act/v_ref)**kv_exp * (rg_on_act/rg_ref)**kr_exp
+        # Eon 对应 Rg_on_ref
+        p_on = (1/math.pi) * fsw * (e_on * mult / 1000) * (vdc_act/v_ref)**kv_exp * (rg_on_act/rg_on_ref)**kr_exp
+        # Eoff 对应 Rg_off_ref
+        p_off = (1/math.pi) * fsw * (e_off * mult / 1000) * (vdc_act/v_ref)**kv_exp * (rg_off_act/rg_off_ref)**kr_exp
+        # Erec 反向恢复由开通速度决定，对应 Rg_on_ref
+        p_rec = (1/math.pi) * fsw * (e_rec * mult / 1000) * (vdc_act/v_ref)**kv_exp * (rg_on_act/rg_on_ref)**kr_exp
+        
         p_sw = p_on + p_off + p_rec
 
         # D. 结温闭环
@@ -134,7 +137,8 @@ if st.button("🚀 执行纯芯片级计算"):
         tj_new = t_case + p_total * rth_jc
         if abs(tj_new - tj_loop) < 0.05: break
         tj_loop = tj_new
-            # --- 结果展示 ---
+
+    # --- 结果展示 ---
     st.divider()
     st.subheader("3. 对标结果分析")
     r1, r2, r3, r4 = st.columns(4)
@@ -143,8 +147,8 @@ if st.button("🚀 执行纯芯片级计算"):
     r3.metric("总开关损耗 P_sw", f"{p_sw:.2f} W")
     r4.metric("模块总损耗", f"{p_total:.2f} W")
 
-    with st.expander("🔬 查看提取的芯片参数与应用的解析公式"):
-        st.write(f"当前从 V-I 矩阵自动反推的硅片参数 (Tj={tj_loop:.1f}℃):")
-        st.write(f"IGBT: Vce0 = {v0_t:.3f} V, r_ce = {r_t*1000:.2f} mΩ")
-        st.write(f"Diode: Vf0 = {v0_d:.3f} V, r_f = {r_d*1000:.2f} mΩ")
-        st.latex(r"P_{IGBT\_cond} = \frac{1}{\pi} V_{CE0} I_{pk} K_{v0\_T} + r_{CE} I_{pk}^2 K_{r\_T}")
+    with st.expander("🔬 查看应用的修正模型"):
+        st.write("开关损耗修正项已分离基准电阻：")
+        st.latex(r"P_{on} \propto \left(\frac{Rg\_on\_act}{Rg\_on\_ref}\right)^{Kr}")
+        st.latex(r"P_{off} \propto \left(\frac{Rg\_off\_act}{Rg\_off\_ref}\right)^{Kr}")
+        st.latex(r"P_{rec} \propto \left(\frac{Rg\_on\_act}{Rg\_on\_ref}\right)^{Kr}")
