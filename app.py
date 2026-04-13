@@ -4,123 +4,125 @@ import numpy as np
 import math
 from scipy.interpolate import interp1d
 
-st.set_page_config(page_title="BYD模块电热耦合对标 Pro", layout="wide")
-st.title("🛡️ 功率模块芯片级电热耦合对标平台 (Pro)")
+st.set_page_config(page_title="BYD双臂独立仿真平台", layout="wide")
+st.title("🛡️ 半桥模块上/下桥臂独立电热耦合对标平台")
 
-# --- 1. 规格书多温度数据矩阵录入 ---
-st.header("1. 多温度规格书矩阵 (Multi-Temp Datasheet)")
+# --- 1. 独立录入：晶体管 (T) 与 二极管 (D) 的数据 ---
+st.header("1. 芯片特性矩阵 (T & D)")
 col_d1, col_d2 = st.columns(2)
 
 with col_d1:
-    st.subheader("📉 通态压降矩阵 Vce(I, T) [V]")
-    # 增加多温度列
+    st.subheader("📊 晶体管特性 (T1/T2)")
+    # Vce 和 Esw (Eon+Eoff)
     vce_data = pd.DataFrame({
-        'Ic (A)': [10.0, 100.0, 450.0, 600.0, 900.0],
-        '25C': [0.85, 1.10, 1.80, 2.20, 2.90],
-        '125C': [0.78, 1.07, 1.90, 2.40, 3.20],
-        '150C': [0.75, 1.05, 1.95, 2.50, 3.40],
-        '175C': [0.72, 1.02, 2.05, 2.65, 3.65]
+        'Ic (A)': [100.0, 450.0, 900.0],
+        '25C_V': [1.10, 1.80, 2.90], '150C_V': [1.05, 1.95, 3.40],
+        '25C_E': [5.0, 25.0, 65.0],  '150C_E': [8.0, 42.0, 110.0]
     })
-    evce = st.data_editor(vce_data, num_rows="dynamic", key="vce_pro")
+    evce = st.data_editor(vce_data, num_rows="dynamic", key="vce_t")
 
 with col_d2:
-    st.subheader("⚡ 开关能量矩阵 Esw(I, T) [mJ]")
-    # 记录 Eon + Eoff + Erec 的总和点
-    esw_data = pd.DataFrame({
-        'Ic (A)': [100.0, 450.0, 900.0],
-        '25C': [2.15, 11.16, 28.79],
-        '150C': [3.50, 18.50, 45.20],
-        '175C': [3.90, 21.00, 51.50]
+    st.subheader("📉 二极管特性 (D1/D2)")
+    # Vf 和 Erec
+    vf_data = pd.DataFrame({
+        'If (A)': [100.0, 450.0, 900.0],
+        '25C_V': [1.20, 1.70, 2.30], '150C_V': [1.10, 1.85, 2.60],
+        '25C_E': [1.50, 6.00, 15.0], '150C_E': [3.00, 12.0, 30.0]
     })
-    eesw = st.data_editor(esw_data, num_rows="dynamic", key="esw_pro")
+    evf = st.data_editor(vf_data, num_rows="dynamic", key="vf_d")
 
-# --- 2. 结构参数与门极电阻设置 ---
+# --- 2. 桥臂差异参数设置 ---
 st.divider()
-st.header("2. 芯片结构与门极驱动参数")
+st.header("2. 桥臂结构与驱动差异")
 c1, c2, c3, c4 = st.columns(4)
 
 with c1:
-    st.markdown("**芯片与桥臂结构**")
-    n_chips = st.number_input("桥臂并联芯片数 (N)", value=6)
-    r_arm = st.number_input("桥臂/引脚内阻 (mΩ)", value=0.5) / 1000
-    rth_jc = st.number_input("RthJC (K/W)", value=0.065, format="%.4f")
+    st.markdown("**结构差异 (散热/内阻)**")
+    n_chips = st.number_input("每臂并联芯片数", value=6)
+    r_arm_up = st.number_input("上桥臂内阻 (mΩ)", value=0.55) / 1000
+    r_arm_low = st.number_input("下桥臂内阻 (mΩ)", value=0.48) / 1000
+    rth_jc = st.number_input("芯片 RthJC (K/W)", value=0.065, format="%.4f")
 
 with c2:
-    st.markdown("**双门极电阻设置**")
-    rg_int = st.number_input("内部门极电阻 Rg_int (Ω)", value=2.0)
-    rg_on_ext = st.number_input("开通电阻 Rg_on_ext (Ω)", value=5.0)
-    rg_off_ext = st.number_input("关断电阻 Rg_off_ext (Ω)", value=25.0)
-    rg_ref = st.number_input("测试基准电阻 Rg_ref (Ω)", value=5.0)
+    st.markdown("**驱动电阻差异**")
+    rg_on = st.number_input("Rg_on (Ω)", value=5.0)
+    rg_off = st.number_input("Rg_off (Ω)", value=10.0)
+    t_dead = st.number_input("死区时间 Deadtime (us)", value=2.5) / 1e6
 
 with c3:
-    st.markdown("**实时运行工况**")
-    vdc = st.number_input("母线电压 Vdc (V)", value=780.0)
-    iout = st.number_input("电流 Iout (Arms)", value=187.0)
-    fsw = st.number_input("开关频率 fsw (Hz)", value=10000)
-    cosphi = st.number_input("功率因数 cosφ", value=0.92)
+    st.markdown("**运行工况**")
+    vdc = st.number_input("Vdc (V)", value=780.0)
+    iout = st.number_input("Iout (Arms)", value=187.0)
+    fsw = st.number_input("fsw (Hz)", value=10000)
+    cosphi = st.number_input("cosφ", value=0.92)
 
 with c4:
-    st.markdown("**调制与修正**")
+    st.markdown("**调制参数**")
     m_index = st.number_input("调制度 M", value=0.92)
     t_case = st.number_input("基板温度 Tc (℃)", value=65.0)
     mode = st.selectbox("调制模式", ["SVPWM", "PWM"])
-    kv_exp = st.number_input("电压修正指数 Kv", value=1.3)
 
-# --- 3. 核心计算引擎 (多维插值迭代) ---
-def multi_temp_interp(df, target_i, target_t, label_prefix=""):
-    """执行 2D 插值：先按电流插值，再按温度线性外推"""
-    temps = [int(col.replace('C', '')) for col in df.columns if 'C' in col]
-    # 对每个温度列进行电流维度的插值
-    vals_at_i = []
-    for temp in temps:
-        col_name = f"{temp}C"
-        f = interp1d(df['Ic (A)'], df[col_name], kind='linear', fill_value="extrapolate")
-        vals_at_i.append(float(f(target_i)))
-    
-    # 针对目标结温 Tj 进行温度维度的插值
-    f_t = interp1d(temps, vals_at_i, kind='linear', fill_value="extrapolate")
-    return float(f_t(target_t))
+# --- 3. 核心计算引擎 (双臂解耦迭代) ---
+def run_bridge_solver():
+    # 建立插值函数 (T 和 D 分开)
+    f_vce_25 = interp1d(evce['Ic (A)'], evce['25C_V'], kind='linear', fill_value="extrapolate")
+    f_vce_150 = interp1d(evce['Ic (A)'], evce['150C_V'], kind='linear', fill_value="extrapolate")
+    f_esw_25 = interp1d(evce['Ic (A)'], evce['25C_E'], kind='linear', fill_value="extrapolate")
+    f_esw_150 = interp1d(evce['Ic (A)'], evce['150C_E'], kind='linear', fill_value="extrapolate")
 
-if st.button("🚀 执行芯片级电热闭环仿真"):
-    tj_loop = t_case + 5.0
-    i_chip = iout / n_chips # 芯片级电流分摊
+    f_vf_25 = interp1d(evf['If (A)'], evf['25C_V'], kind='linear', fill_value="extrapolate")
+    f_vf_150 = interp1d(evf['If (A)'], evf['150C_V'], kind='linear', fill_value="extrapolate")
+    f_erec_25 = interp1d(evf['If (A)'], evf['25C_E'], kind='linear', fill_value="extrapolate")
+    f_erec_150 = interp1d(evf['If (A)'], evf['150C_E'], kind='linear', fill_value="extrapolate")
+
+    # 初始结温：上桥 Tj_up, 下桥 Tj_low
+    tj_up, tj_low = t_case + 5.0, t_case + 5.0
+    phi = math.acos(cosphi)
     
-    # 迭代对齐损耗与结温
-    for i in range(12):
-        # A. 导通损耗 (考虑芯片 Vce + 桥臂内阻)
-        vce_chip = multi_temp_interp(evce, iout, tj_loop)
-        v_total = vce_chip + iout * r_arm
-        
-        phi = math.acos(cosphi)
+    # 迭代对齐
+    for i in range(15):
+        # 调制占空比修正项 (基于 SVPWM/PWM 解析公式)
         if mode == "SVPWM":
-            k_v0, k_r = 0.25*m_index*cosphi, (24*cosphi - 2*math.sqrt(3)*math.cos(2*phi) - 3*math.sqrt(3))/24
+            d_t = 1/2 + m_index*cosphi/2 # 简化版：T 管有效导通率
+            d_d = 1/2 - m_index*cosphi/2 # 简化版：D 管有效导通率
         else:
-            k_v0, k_r = (1/(2*math.pi)) + (m_index*cosphi/8), (1/8) + (m_index*cosphi/(3*math.pi))
-        
-        p_cond = v_total * iout * (k_v0 * 4 + k_r * 2) / 2
+            d_t = (1/math.pi) + (m_index*cosphi/4)
+            d_d = (1/math.pi) - (m_index*cosphi/4)
 
-        # B. 开关损耗 (考虑双电阻修正)
-        esw_base = multi_temp_interp(eesw, iout, tj_loop)
-        # 电阻修正逻辑: Rg_total / Rg_ref (简化模型，可按需改为幂函数)
-        rg_on_total = rg_int + rg_on_ext
-        rg_off_total = rg_int + rg_off_ext
-        r_corr = ((rg_on_total + rg_off_total) / 2) / rg_ref
+        # --- A. 上桥计算 ---
+        vce_up = f_vce_25(iout) + (f_vce_150(iout)-f_vce_25(iout))*(tj_up-25)/125
+        p_cond_up = (vce_up + iout * r_arm_up) * iout * d_t
+        esw_up = f_esw_25(iout) + (f_esw_150(iout)-f_esw_25(iout))*(tj_up-25)/125
+        p_sw_up = (1/math.pi) * fsw * (esw_up/1000) * (vdc/510.0)**1.3 * (rg_on/5.0)
         
-        v_corr = math.pow(vdc / 510.0, kv_exp) # 假设 510V 为测试基准
-        p_sw = (1/math.pi) * fsw * (esw_base / 1000) * v_corr * r_corr
+        # --- B. 下桥计算 ---
+        vce_low = f_vce_25(iout) + (f_vce_150(iout)-f_vce_25(iout))*(tj_low-25)/125
+        p_cond_low = (vce_low + iout * r_arm_low) * iout * d_t
+        esw_low = f_esw_25(iout) + (f_esw_150(iout)-f_esw_25(iout))*(tj_low-25)/125
+        p_sw_low = (1/math.pi) * fsw * (esw_low/1000) * (vdc/510.0)**1.3 * (rg_on/5.0)
 
-        p_total = p_sw + p_cond
-        tj_new = t_case + p_total * rth_jc
+        # C. 结温反馈
+        tj_up_new = t_case + (p_cond_up + p_sw_up) * rth_jc
+        tj_low_new = t_case + (p_cond_low + p_sw_low) * rth_jc
         
-        if abs(tj_new - tj_loop) < 0.05: break
-        tj_loop = tj_new
+        if abs(tj_up_new - tj_up) < 0.05 and abs(tj_low_new - tj_low) < 0.05:
+            break
+        tj_up, tj_low = tj_up_new, tj_low_new
 
-    # --- 结果展示 ---
-    st.divider()
-    res1, res2, res3, res4 = st.columns(4)
-    res1.metric("计算结温 Tj", f"{tj_loop:.2f} ℃")
-    res2.metric("芯片级电流 (I/N)", f"{i_chip:.2f} A")
-    res3.metric("导通功耗 P_cond", f"{p_cond:.2f} W")
-    res4.metric("开关功耗 P_sw", f"{p_sw:.2f} W")
+    return p_cond_up, p_sw_up, tj_up, p_cond_low, p_sw_low, tj_low
+
+if st.button("🚀 执行双桥臂独立仿真"):
+    pcu, psu, tju, pcl, psl, tjl = run_bridge_solver()
     
-    st.info(f"对标提醒：当前 Rth={rth_jc}，若实测 Tj 偏高，请检查 Rg_off({rg_off_total}Ω) 导致的关断拖尾损耗。")
+    st.divider()
+    res1, res2 = st.columns(2)
+    with res1:
+        st.subheader("🔼 上桥臂 (Upper Arm)")
+        st.metric("结温 Tj_up", f"{tju:.2f} ℃")
+        st.write(f"导通: {pcu:.1f}W | 开关: {psu:.1f}W")
+    with res2:
+        st.subheader("🔽 下桥臂 (Lower Arm)")
+        st.metric("结温 Tj_low", f"{tjl:.2f} ℃")
+        st.write(f"导通: {pcl:.1f}W | 开关: {psl:.1f}W")
+    
+    st.warning(f"分析：两臂温差为 {abs(tju-tjl):.2f} K。这主要源于内阻差异 R_up={r_arm_up*1000}mΩ vs R_low={r_arm_low*1000}mΩ。")
