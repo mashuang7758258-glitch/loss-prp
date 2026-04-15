@@ -40,7 +40,7 @@ with tab1:
     with col_t:
         st.subheader("🔴 主管特性 (IGBT / SiC)")
         v_df_main = pd.DataFrame({'Temp (℃)': [25, 150, 25, 150], 'Current (A)': [100.0, 100.0, 600.0, 600.0], 'V_drop (V)': [1.1, 1.05, 2.2, 2.5]})
-        ev_main = st.data_editor(v_df_main, num_rows="dynamic", key="v_main", help="Vce 或 Vds")
+        ev_main = st.data_editor(v_df_main, num_rows="dynamic", key="v_main")
         
         e_df_main = pd.DataFrame({'Temp (℃)': [25, 150, 25, 150], 'Current (A)': [100.0, 100.0, 600.0, 600.0], 'Eon (mJ)': [5.9, 8.5, 70.0, 95.0], 'Eoff (mJ)': [4.9, 7.2, 45.0, 60.0]})
         ee_main = st.data_editor(e_df_main, num_rows="dynamic", key="e_main")
