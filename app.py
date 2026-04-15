@@ -33,7 +33,7 @@ with st.sidebar:
     st.header("🎯 仿真目标重构")
     n_sim = st.number_input("目标仿真芯片数 (N_sim)", value=6, min_value=1, 
                             help="【扩容/减容核心】你想评估多少并联芯片的模块？填入此数，损耗会自动按此规模折算")
-        st.divider()
+    st.divider()
     st.header("🔄 热学计算工作流")
     sim_mode = st.radio("模式选择", ["A. 开环盲算 (已知结温)", "B. 闭环迭代 (已知热阻)"])
     if "闭环" in sim_mode:
