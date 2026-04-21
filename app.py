@@ -650,17 +650,43 @@ def calc_stall_losses(
 
 def build_star_ccm_total_heat_table(n_sim: int, p_main_chip: float, p_diode_chip: float) -> pd.DataFrame:
     rows = []
-    for idx in range(1, n_sim + 1):
-        rows.append({"Region": f"MainChip_{idx}", "Category": "Main Switch", "Total Heat Source (W)": round(p_main_chip, 6)})
-        rows.append({"Region": f"DiodeChip_{idx}", "Category": "Freewheel Diode", "Total Heat Source (W)": round(p_diode_chip, 6)})
+    for leg_prefix in ("Upper", "Lower"):
+        for idx in range(1, n_sim + 1):
+            rows.append(
+                {
+                    "Region": f"{leg_prefix}MainChip_{idx}",
+                    "Category": "Main Switch",
+                    "Total Heat Source (W)": round(p_main_chip, 6),
+                }
+            )
+            rows.append(
+                {
+                    "Region": f"{leg_prefix}DiodeChip_{idx}",
+                    "Category": "Freewheel Diode",
+                    "Total Heat Source (W)": round(p_diode_chip, 6),
+                }
+            )
     return pd.DataFrame(rows)
 
 
 def build_icepak_heat_table(n_sim: int, p_main_chip: float, p_diode_chip: float) -> pd.DataFrame:
     rows = []
-    for idx in range(1, n_sim + 1):
-        rows.append({"Region": f"MainChip_{idx}", "Category": "Main Switch", "Heat Generation Rate (W)": round(p_main_chip, 6)})
-        rows.append({"Region": f"DiodeChip_{idx}", "Category": "Freewheel Diode", "Heat Generation Rate (W)": round(p_diode_chip, 6)})
+    for leg_prefix in ("Upper", "Lower"):
+        for idx in range(1, n_sim + 1):
+            rows.append(
+                {
+                    "Region": f"{leg_prefix}MainChip_{idx}",
+                    "Category": "Main Switch",
+                    "Heat Generation Rate (W)": round(p_main_chip, 6),
+                }
+            )
+            rows.append(
+                {
+                    "Region": f"{leg_prefix}DiodeChip_{idx}",
+                    "Category": "Freewheel Diode",
+                    "Heat Generation Rate (W)": round(p_diode_chip, 6),
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -903,8 +929,10 @@ def simulate_system(inputs: dict, tables: dict):
 
         p_main_chip = p_cond_main_chip + p_sw_main_bare_die
         p_diode_chip = p_cond_diode_chip + p_sw_diode_bare_die
-        p_main_arm = p_main_chip * bridge_chip_count
-        p_diode_arm = p_diode_chip * bridge_chip_count
+        p_main_switch_position = p_main_chip * bridge_chip_count
+        p_diode_switch_position = p_diode_chip * bridge_chip_count
+        p_main_arm = p_main_switch_position * 2.0
+        p_diode_arm = p_diode_switch_position * 2.0
         p_total_arm = p_main_arm + p_diode_arm
 
         if "闭环" in inputs["sim_mode"]:
@@ -944,9 +972,6 @@ def simulate_system(inputs: dict, tables: dict):
     p_total_system = p_total_arm * inputs["n_arm_system"]
     p_main_total_system = p_main_arm * inputs["n_arm_system"]
     p_diode_total_system = p_diode_arm * inputs["n_arm_system"]
-    p_main_switch_position = p_main_arm
-    p_diode_switch_position = p_diode_arm
-
     star_ccm_df = build_star_ccm_total_heat_table(bridge_chip_count, p_main_chip, p_diode_chip)
     icepak_df = build_icepak_heat_table(bridge_chip_count, p_main_chip, p_diode_chip)
     matrix_health_df = build_matrix_health_df(inputs, tables)
@@ -977,10 +1002,12 @@ def simulate_system(inputs: dict, tables: dict):
 
     loss_breakdown_df = pd.DataFrame(
         [
-            {"对象": "主开关芯片", "项目": "导通损耗", "单颗 (W)": p_cond_main_chip, "单臂总计 (W)": p_cond_main_chip * inputs["n_sim"]},
-            {"对象": "主开关芯片", "项目": "开通+关断损耗", "单颗 (W)": p_sw_main_bare_die, "单臂总计 (W)": p_sw_main_bare_die * inputs["n_sim"]},
-            {"对象": "续流二极管", "项目": "导通损耗", "单颗 (W)": p_cond_diode_chip, "单臂总计 (W)": p_cond_diode_chip * inputs["n_sim"]},
-            {"对象": "续流二极管", "项目": "恢复损耗", "单颗 (W)": p_sw_diode_bare_die, "单臂总计 (W)": p_sw_diode_bare_die * inputs["n_sim"]},
+            {"对象": "主开关芯片", "项目": "导通损耗", "单颗 (W)": p_cond_main_chip, "单臂总计 (W)": p_cond_main_chip * inputs["n_sim"] * 2.0},
+            {"对象": "主开关芯片", "项目": "开通+关断损耗", "单颗 (W)": p_sw_main_bare_die, "单臂总计 (W)": p_sw_main_bare_die * inputs["n_sim"] * 2.0},
+            {"对象": "续流二极管", "项目": "导通损耗", "单颗 (W)": p_cond_diode_chip, "单臂总计 (W)": p_cond_diode_chip * inputs["n_sim"] * 2.0},
+            {"对象": "续流二极管", "项目": "恢复损耗", "单颗 (W)": p_sw_diode_bare_die, "单臂总计 (W)": p_sw_diode_bare_die * inputs["n_sim"] * 2.0},
+            {"对象": "主开关并联位", "项目": "单开关位置总损耗", "单颗 (W)": np.nan, "单臂总计 (W)": p_main_switch_position},
+            {"对象": "续流并联位", "项目": "单开关位置总损耗", "单颗 (W)": np.nan, "单臂总计 (W)": p_diode_switch_position},
             {"对象": "系统级缩放", "项目": "主芯片系统总损耗", "单颗 (W)": np.nan, "单臂总计 (W)": p_main_total_system},
             {"对象": "系统级缩放", "项目": "二极管系统总损耗", "单颗 (W)": np.nan, "单臂总计 (W)": p_diode_total_system},
             {"对象": "系统级缩放", "项目": "系统总功耗", "单颗 (W)": np.nan, "单臂总计 (W)": p_total_system},
@@ -1585,8 +1612,8 @@ if result:
         f"Erec = {result['erec_meta']['strategy_label']}。"
     )
     st.caption(
-        f"当前结果里：'单颗发热率' = 单个 die；'并联位总损耗' = 一个开关位置上 {result['n_sim']} 颗并联芯片合计。"
-        f" 这一步通常更接近公司模块级小程序的口径；系统级总量再按 N_arm_sys = {result['n_arm_system']} 做桥臂缩放。"
+        f"当前结果里：'单颗发热率' = 单个 die；'并联位总损耗' = 一个开关位置上 {result['n_sim']} 颗并联芯片合计；"
+        f" '单臂总功耗' = 上下桥位对称折算后的完整半桥。系统级总量再按 N_arm_sys = {result['n_arm_system']} 做桥臂缩放。"
     )
 
     d1, d2, d3, d4 = st.columns(4)
