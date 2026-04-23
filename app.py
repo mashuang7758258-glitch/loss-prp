@@ -145,6 +145,30 @@ def validate_numeric_table(df: pd.DataFrame, table_name: str, required_cols: lis
     return cleaned, errors, warnings
 
 
+def is_effectively_empty_table(df: pd.DataFrame) -> bool:
+    cleaned = canonicalize_df_columns(df.copy()).replace(r"^\s*$", pd.NA, regex=True).dropna(how="all")
+    return cleaned.empty
+
+
+def mirror_main_cond_table_for_diode(main_df: pd.DataFrame, input_mode: str) -> pd.DataFrame:
+    mirrored = canonicalize_df_columns(main_df.copy()).replace(r"^\s*$", pd.NA, regex=True).dropna(how="all").copy()
+    if input_mode == "manual_linearized":
+        if "V0 (V)" in mirrored.columns:
+            mirrored["V0 (V)"] = 0.0
+        return mirrored
+    return mirrored.rename(columns={"V_drop (V)": "Vf (V)"})
+
+
+def mirror_main_switching_table_for_diode(main_df: pd.DataFrame) -> pd.DataFrame:
+    mirrored = canonicalize_df_columns(main_df.copy()).replace(r"^\s*$", pd.NA, regex=True).dropna(how="all").copy()
+    if "Erec (mJ)" not in mirrored.columns:
+        if "Eoff (mJ)" in mirrored.columns:
+            mirrored["Erec (mJ)"] = mirrored["Eoff (mJ)"]
+        elif "Eon (mJ)" in mirrored.columns:
+            mirrored["Erec (mJ)"] = mirrored["Eon (mJ)"]
+    return mirrored
+
+
 def validate_scalar_inputs(inputs: dict):
     errors: list[str] = []
     warnings: list[str] = []
@@ -864,7 +888,7 @@ def simulate_system(inputs: dict, tables: dict):
             i_pk_cond_domain,
             tj_diode_current,
             "Vf (V)",
-            force_zero_intercept=False,
+            force_zero_intercept=inputs.get("diode_force_zero_intercept", False),
             input_mode=inputs.get("cond_param_input_mode", "lookup_vi"),
         )
 
@@ -1571,6 +1595,10 @@ inputs = {
 tables_for_validation = {}
 validation_errors: list[str] = []
 validation_warnings: list[str] = []
+is_diode_optional = ("A. 公司 Excel 对标模式" in inputs["loss_eval_mode"]) or ("SiC MOSFET" in inputs["device_type"])
+is_diode_vi_empty = is_effectively_empty_table(ev_diode)
+is_diode_ei_empty = is_effectively_empty_table(ee_diode)
+diode_auto_mirrored = False
 
 main_cond_required_cols = [TEMP_COL, CURRENT_COL, "V0 (V)", "R_dynamic (Ω)"] if inputs["cond_param_input_mode"] == "manual_linearized" else [TEMP_COL, CURRENT_COL, "V_drop (V)"]
 diode_cond_required_cols = [TEMP_COL, CURRENT_COL, "V0 (V)", "R_dynamic (Ω)"] if inputs["cond_param_input_mode"] == "manual_linearized" else [TEMP_COL, CURRENT_COL, "Vf (V)"]
@@ -1589,22 +1617,20 @@ validation_warnings.extend(warns)
 
 validated_diode_vi, errs, warns = validate_numeric_table(ev_diode, diode_cond_table_name, diode_cond_required_cols)
 tables_for_validation["ev_diode"] = validated_diode_vi
-validation_errors.extend(errs)
+if not (is_diode_optional and is_diode_vi_empty):
+    validation_errors.extend(errs)
 validation_warnings.extend(warns)
 
 validated_diode_ei, errs, warns = validate_numeric_table(ee_diode, "二极管恢复能量表", [TEMP_COL, CURRENT_COL, "Erec (mJ)"])
 tables_for_validation["ee_diode"] = validated_diode_ei
-validation_errors.extend(errs)
+if not (is_diode_optional and is_diode_ei_empty):
+    validation_errors.extend(errs)
 validation_warnings.extend(warns)
 
 scalar_errors, scalar_warnings = validate_scalar_inputs(inputs)
 validation_errors.extend(scalar_errors)
 validation_warnings.extend(scalar_warnings)
 matrix_health_preview_df = build_matrix_health_df(inputs, tables_for_validation)
-
-if "A. 公司 Excel 对标模式" in inputs["loss_eval_mode"] and "SiC" in inputs["device_type"]:
-    tables_for_validation["ev_diode"] = tables_for_validation["ev_main"].copy()
-    validation_warnings.append("公司 Excel 对标模式已启用：SiC 续流路径导通参数将直接复制主开关模型，t_dead 强制为 0。")
 
 with st.expander("🧭 数据矩阵健康度与温漂诊断", expanded=False):
     st.dataframe(matrix_health_preview_df, use_container_width=True)
@@ -1625,8 +1651,21 @@ if compute_requested:
         for err in validation_errors:
             st.write(f"- {err}")
     else:
-        result = simulate_system(inputs, tables_for_validation)
+        tables_for_sim = {name: table.copy() for name, table in tables_for_validation.items()}
+        if is_diode_optional and (is_diode_vi_empty or is_diode_ei_empty):
+            if is_diode_vi_empty:
+                tables_for_sim["ev_diode"] = mirror_main_cond_table_for_diode(validated_main_vi, inputs["cond_param_input_mode"])
+            if is_diode_ei_empty:
+                tables_for_sim["ee_diode"] = mirror_main_switching_table_for_diode(validated_main_ei)
+            diode_auto_mirrored = True
+
+        sim_inputs = inputs.copy()
+        sim_inputs["diode_auto_mirrored"] = diode_auto_mirrored
+        sim_inputs["diode_force_zero_intercept"] = diode_auto_mirrored
+
+        result = simulate_system(sim_inputs, tables_for_sim)
         result["warnings"] = validation_warnings
+        result["diode_auto_mirrored"] = diode_auto_mirrored
         st.session_state["simulation_result"] = result
 
 result = st.session_state.get("simulation_result")
@@ -1635,6 +1674,8 @@ if result:
     st.success(f"✅ 计算完成！当前状态：{result['op_mode']} | 并联 N: {result['n_sim']}")
     for message in result["extrapolation_messages"]:
         st.warning(message)
+    if result.get("diode_auto_mirrored"):
+        st.info("提示：当前未输入二极管参数，系统已根据‘公司对标模式’自动镜像主芯片导通特性。")
     if "SiC" in result["device_type"]:
         st.info("SiC 架构锁已启用：主开关导通模型强制 `V0 = 0`，底层仅保留纯阻性发热项；二极管侧仍保留 `Vf0 + R`。")
     if result["thermal_meta"]["thermal_model"] == "half_bridge_main_reference":
